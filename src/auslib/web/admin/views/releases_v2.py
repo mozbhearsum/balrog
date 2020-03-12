@@ -9,7 +9,7 @@ def get_releases():
 
 
 def update_release(name, body):
-    if not releases.exists(name, request.transaction):
+    if not releases.exists(name, request.transaction) or releases.sc_exists(name, request.transaction):
         return problem(404, "Missing", "Release does not exist")
     new_data_versions = releases.update_release(name, body["blob"], body["old_data_versions"], body.get("when"), request.username, request.transaction)
     return new_data_versions, 200

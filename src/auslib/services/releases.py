@@ -191,6 +191,18 @@ def exists(name, trans):
     return False
 
 
+def sc_exists(name, trans):
+    if any(
+        [
+            dbo.releases_json.scheduled_changes.select(where={"base_name": name}, columns=[dbo.releases_json.scheduled_changes.base_name], transaction=trans),
+            dbo.release_assets.scheduled_changes.select(where={"base_name": name}, columns=[dbo.release_assets.scheduled_changes.base_name], transaction=trans),
+        ]
+    ):
+        return True
+
+    return False
+
+
 def is_read_only(name, trans):
     return dbo.releases_json.select(where={"name": name}, columns=[dbo.releases_json.read_only], transaction=trans)[0].get("read_only")
 
@@ -199,6 +211,14 @@ def get_assets(name, trans):
     assets = {}
     for asset in dbo.release_assets.select(where={"name": name}, transaction=trans):
         assets[asset["path"]] = asset
+
+    return assets
+
+
+def get_scheduled_assets(name, trans):
+    assets = {}
+    for asset in dbo.release_assets.scheduled_changes.select(where={"base_name": name, "complete": False}, transaction=trans):
+        assets[asset["base_path"]] = asset
 
     return assets
 
@@ -367,77 +387,236 @@ def set_release(name, blob, product, old_data_versions, when, changed_by, trans)
     createBlob(blob).validate(product or current_product, app.config["WHITELISTED_DOMAINS"])
 
     current_assets = get_assets(name, trans)
+    scheduled_assets = None
+    if when:
+        scheduled_assets = get_scheduled_assets(name, trans)
     base_blob, new_assets = split_release(blob, blob["schema_version"])
     seen_assets = set()
     for path, item in new_assets:
         str_path = "." + ".".join(path)
         seen_assets.add(str_path)
-        if item == current_assets.get(str_path, {}).get("data"):
-            continue
-
+        current_asset = current_assets.get(str_path)
         old_data_version = get_by_path(old_data_versions, path)
-        if old_data_version:
-            if when:
-                sc_id = dbo.release_assets.scheduled_changes.insert(
-                    name=name,
-                    path=str_path,
-                    data=item,
-                    data_version=old_data_version,
-                    when=when,
-                    change_type="update",
-                    changed_by=changed_by,
-                    transaction=trans,
-                )
-                set_by_path(new_data_versions, path, {"sc_id": sc_id, "change_type": "update", "data_version": 1})
+
+        if when:
+            scheduled_asset = scheduled_assets.get(str_path)
+            if current_asset:
+                if scheduled_asset:
+                    if scheduled_asset["change_type"] == "update":
+                        if current_asset["data"] == item:
+                            dbo.release_assets.scheduled_changes.delete(where={"sc_id": scheduled_asset["sc_id"]}, changed_by=changed_by, old_data_version=old_data_version, transaction=trans)
+                        elif scheduled_asset["base_data"] != item:
+                            dbo.release_assets.scheduled_changes.update(
+                                where={"sc_id": scheduled_asset["sc_id"]},
+                                what={"data": item, "when": when},
+                                old_data_version=old_data_version,
+                                changed_by=changed_by,
+                                transaction=trans,
+                            )
+                            set_by_path(new_data_versions, path, {"sc_id": scheduled_asset["sc_id"], "change_type": "update", "data_version": old_data_version + 1})
+                    elif scheduled_asset["change_type"] == "delete":
+                        if current_asset["data"] == item:
+                            dbo.release_assets.scheduled_changes.delete(where={"sc_id": scheduled_asset["sc_id"]}, changed_by=changed_by, old_data_version=old_data_version, transaction=trans)
+                        elif scheduled_asset["base_data"] != item:
+                            dbo.release_assets.scheduled_changes.delete(where={"sc_id": scheduled_asset["sc_id"]}, changed_by=changed_by, old_data_version=old_data_version, transaction=trans)
+                            base_data_version = dbo.release_assets.select(where={"name": name, "path": str_path}, columns=[dbo.release_assets.data_version])[0]["data_version"]
+                            sc_id = dbo.release_assets.scheduled_changes.insert(
+                                name=name,
+                                path=str_path,
+                                data=item,
+                                data_version=base_data_version,
+                                when=when,
+                                change_type="update",
+                                changed_by=changed_by,
+                                transaction=trans,
+                            )
+                            set_by_path(new_data_versions, path, {"sc_id": sc_id, "change_type": "update", "data_version": 1})
+                else:
+                    if current_asset["data"] != item:
+                        base_data_version = dbo.release_assets.select(where={"name": name, "path": str_path}, columns=[dbo.release_assets.data_version])[0]["data_version"]
+                        sc_id = dbo.release_assets.scheduled_changes.insert(
+                            name=name,
+                            path=str_path,
+                            data=item,
+                            data_version=base_data_version,
+                            when=when,
+                            change_type="update",
+                            changed_by=changed_by,
+                            transaction=trans,
+                        )
+                        set_by_path(new_data_versions, path, {"sc_id": sc_id, "change_type": "update", "data_version": 1})
             else:
-                set_by_path(new_data_versions, path, old_data_version + 1)
-                dbo.release_assets.update(
-                    where={"name": name, "path": str_path}, what={"data": item}, old_data_version=old_data_version, changed_by=changed_by, transaction=trans
-                )
+                if scheduled_asset:
+                    if scheduled_asset["change_type"] == "insert":
+                        if scheduled_asset["base_data"] != item:
+                            dbo.release_assets.scheduled_changes.update(
+                                where={"sc_id": scheduled_asset["sc_id"]},
+                                what={"data": item, "when": when},
+                                old_data_version=old_data_version,
+                                changed_by=changed_by,
+                                transaction=trans,
+                            )
+                            set_by_path(new_data_versions, path, {"sc_id": scheduled_asset["sc_id"], "change_type": "update", "data_version": old_data_version + 1})
+                    else:
+                        raise Exception("this shouldn't be possible")
+                else:
+                    sc_id = dbo.release_assets.scheduled_changes.insert(
+                        name=name,
+                        path=str_path,
+                        data=item,
+                        when=when,
+                        change_type="insert",
+                        changed_by=changed_by,
+                        transaction=trans,
+                    )
+                    set_by_path(new_data_versions, path, {"sc_id": sc_id, "change_type": "insert", "data_version": 1})
         else:
-            if when:
-                sc_id = dbo.release_assets.scheduled_changes.insert(
-                    name=name, path=str_path, data=item, when=when, change_type="insert", changed_by=changed_by, transaction=trans
-                )
-                set_by_path(new_data_versions, path, {"sc_id": sc_id, "change_type": "insert", "data_version": 1})
+            if current_asset:
+                if current_asset["data"] != item:
+                    set_by_path(new_data_versions, path, old_data_version + 1)
+                    dbo.release_assets.update(
+                        where={"name": name, "path": str_path}, what={"data": item}, old_data_version=old_data_version, changed_by=changed_by, transaction=trans
+                    )
             else:
                 set_by_path(new_data_versions, path, 1)
                 dbo.release_assets.insert(name=name, path=str_path, data=item, changed_by=changed_by, transaction=trans)
 
     removed_assets = {a for a in current_assets} - seen_assets
-    for path in removed_assets:
-        abc = path.split(".")[1:]
+    for str_path in removed_assets:
+        path = str_path.split(".")[1:]
         if when:
-            sc_id = dbo.release_assets.scheduled_changes.insert(
-                name=name,
-                path=str_path,
-                data_version=get_by_path(old_data_versions, abc),
-                when=when,
-                change_type="delete",
-                changed_by=changed_by,
-                transaction=trans,
-            )
-            set_by_path(new_data_versions, path, {"sc_id": sc_id, "change_type": "update", "data_version": 1})
+            if current_asset:
+                if scheduled_asset:
+                    if scheduled_asset["change_type"] == "update":
+                        dbo.release_assets.scheduled_changes.delete(where={"sc_id": scheduled_asset["sc_id"]}, changed_by=changed_by, old_data_version=old_data_version, transaction=trans)
+                        base_data_version = dbo.release_assets.select(where={"name": name, "path": str_path}, columns=[dbo.release_assets.data_version])[0]["data_version"]
+                        sc_id = dbo.release_assets.scheduled_changes.insert(
+                            name=name,
+                            path=str_path,
+                            data_version=base_data_version,
+                            when=when,
+                            change_type="delete",
+                            changed_by=changed_by,
+                            transaction=trans,
+                        )
+                        set_by_path(new_data_versions, path, {"sc_id": sc_id, "change_type": "delete", "data_version": 1})
+                else:
+                    base_data_version = dbo.release_assets.select(where={"name": name, "path": str_path}, columns=[dbo.release_assets.data_version])[0]["data_version"]
+                    sc_id = dbo.release_assets.scheduled_changes.insert(
+                        name=name,
+                        path=str_path,
+                        data_version=base_data_version,
+                        when=when,
+                        change_type="delete",
+                        changed_by=changed_by,
+                        transaction=trans,
+                    )
+                    set_by_path(new_data_versions, path, {"sc_id": sc_id, "change_type": "delete", "data_version": 1})
+            else:
+                if scheduled_asset:
+                    if scheduled_asset["change_type"] == "insert":
+                        dbo.release_assets.scheduled_changes.delete(where={"sc_id": scheduled_asset["sc_id"]}, changed_by=changed_by, old_data_version=old_data_version, transaction=trans)
+                    else:
+                        raise Exception("this shouldn't be possible")
         else:
             dbo.release_assets.delete(
-                where={"name": name, "path": path}, old_data_version=get_by_path(old_data_versions, abc), changed_by=changed_by, transaction=trans
+                where={"name": name, "path": str_path}, old_data_version=get_by_path(old_data_versions, path), changed_by=changed_by, transaction=trans
             )
 
-    if current_base_blob != base_blob:
-        if old_data_versions.get("."):
-            what = {"data": base_blob}
-            if product:
-                what["product"] = product
-            if when:
-                sc_id = dbo.releases_json.scheduled_changes.insert(
-                    name=name, data_version=old_data_versions["."], when=when, change_type="update", changed_by=changed_by, transaction=trans, **what
-                )
-                new_data_versions["."] = {"sc_id": sc_id, "change_type": "update", "data_version": 1}
+    if when:
+        scheduled_base = dbo.releases_json.scheduled_changes.select(where={"base_name": name, "complete": False}, transaction=trans)
+        if scheduled_base:
+            scheduled_base = scheduled_base[0]
+        if current_base_blob:
+            old_data_version = old_data_versions.get(".")
+            base_data_version = dbo.releases_json.select(where={"name": name}, transaction=trans)[0]["data_version"]
+            if scheduled_base:
+                if scheduled_base["change_type"] == "update":
+                    if current_base_blob != scheduled_base["blob"]:
+                        if current_base_blob != base_blob:
+                            dbo.releases_json.scheduled_changes.update(
+                                where={"sc_id": scheduled_base["sc_id"]},
+                                what={"data": base_blob, "when": when},
+                                old_data_version=old_data_version,
+                                changed_by=changed_by,
+                                transaction=trans,
+                            )
+                            new_data_versions["."] = {"sc_id": scheduled_base["sc_id"], "data_version": old_data_version + 1, change_type: "update"}
+                        else:
+                            dbo.releases_json.scheduled_changes.delete(where={"sc_id": scheduled_base["sc_id"]}, changed_by=changed_by, old_data_version=old_data_version, transaction=trans)
+                elif scheduled_base["change_type"] == "delete":
+                    if current_base_blob != scheduled_base["blob"]:
+                        if current_base_blob != base_blob:
+                            dbo.releases_json.scheduled_changes.delete(where={"sc_id": scheduled_base["sc_id"]}, changed_by=changed_by, old_data_version=old_data_version, transaction=trans)
+                            dbo.releases_json.scheduled_changes.update(
+                                where={"sc_id": scheduled_base["sc_id"]},
+                                what={"data": base_blob, "when": when},
+                                old_data_version=old_data_version,
+                                changed_by=changed_by,
+                                transaction=trans,
+                            )
+                            new_data_versions["."] = {"sc_id": scheduled_base["sc_id"], "data_version": old_data_version + 1, change_type: "delete"}
+                        else:
+                            dbo.releases_json.scheduled_changes.delete(where={"sc_id": scheduled_base["sc_id"]}, changed_by=changed_by, old_data_version=old_data_version, transaction=trans)
             else:
-                dbo.releases_json.update(where={"name": name}, what=what, old_data_version=old_data_versions["."], changed_by=changed_by, transaction=trans)
+                if current_base_blob != base_blob:
+                    sc_id = dbo.releases_json.scheduled_changes.insert(
+                        name=name,
+                        product=product or current_product,
+                        data=base_blob,
+                        data_version=base_data_version,
+                        when=when,
+                        change_type="update",
+                        changed_by=changed_by,
+                        transaction=trans,
+                    )
+                    new_data_versions["."] = {"sc_id": sc_id, "data_version": 1, "change_type": "update"}
+        else:
+            if scheduled_base:
+                old_data_version = old_data_versions.get(".")
+                print(path)
+                from pprint import pprint
+                pprint(scheduled_base["base_data"])
+                pprint(base_blob)
+                if scheduled_base["change_type"] == "insert":
+                    if scheduled_base["base_data"] != base_blob:
+                        dbo.releases_json.scheduled_changes.update(
+                            where={"sc_id": scheduled_base["sc_id"]},
+                            what={"data": base_blob, "when": when},
+                            old_data_version=old_data_version,
+                            changed_by=changed_by,
+                            transaction=trans,
+                        )
+                        new_data_versions["."] = {"sc_id": scheduled_base["sc_id"], "data_version": old_data_version + 1, change_type: "insert"}
+                else:
+                    raise Exception("this shouldn't be possible")
+            else:
+                sc_id = dbo.releases_json.scheduled_changes.insert(
+                    name=name,
+                    product=product or current_product,
+                    data=base_blob,
+                    when=when,
+                    change_type="insert",
+                    changed_by=changed_by,
+                    transaction=trans,
+                )
+                new_data_versions["."] = {"sc_id": sc_id, "data_version": 1, change_type: "insert"}
+    else:
+        what = {"data": base_blob}
+        if product:
+            what["product"] = product
+        if current_base_blob:
+            if current_base_blob != base_blob:
+                dbo.releases_json.update(
+                    where={"name": name},
+                    what=what,
+                    old_data_version=old_data_versions["."],
+                    changed_by=changed_by,
+                    transaction=trans,
+                )
                 new_data_versions["."] = old_data_versions["."] + 1
         else:
             dbo.releases_json.insert(name=name, product=product, data=base_blob, changed_by=changed_by, transaction=trans)
             new_data_versions["."] = 1
-
+                
     return new_data_versions

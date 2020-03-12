@@ -1066,6 +1066,102 @@ def test_put_add_scheduled_change_locale_only(api, firefox_56_0_build1):
 
 
 @pytest.mark.usefixtures("releases_db", "mock_verified_userinfo")
+def test_put_add_scheduled_change_add_locale(api, firefox_56_0_build1):
+    firefox_56_0_build1 = deepcopy(firefox_56_0_build1)
+    firefox_56_0_build1["platforms"]["Linux_x86_64-gcc3"]["locales"]["en-NZ"] = firefox_56_0_build1["platforms"]["Linux_x86_64-gcc3"]["locales"]["en-US"]
+
+    new_data_versions = {"platforms": {"Linux_x86_64-gcc3": {"locales": {"en-NZ": {"sc_id": 18, "data_version": 1, "change_type": "insert"}}}}}
+
+    ret = api.put(
+        "/v2/releases/Firefox-56.0-build1",
+        json={"blob": firefox_56_0_build1, "product": "Firefox", "old_data_versions": {}, "when": 1681639932000},
+    )
+    assert ret.status_code == 200, ret.data
+    assert ret.json == new_data_versions, ret.json
+
+    base_sc = dbo.releases_json.scheduled_changes.t.select().where(dbo.releases_json.scheduled_changes.base_name == "Firefox-56.0-build1").execute().fetchall()
+    assert len(base_sc) == 0
+
+    locale_sc = (
+        dbo.release_assets.scheduled_changes.t.select()
+        .where(dbo.release_assets.scheduled_changes.base_name == "Firefox-56.0-build1")
+        .where(dbo.release_assets.scheduled_changes.base_path == ".platforms.Linux_x86_64-gcc3.locales.en-NZ")
+        .execute()
+        .fetchone()
+    )
+    locale_sc_cond = (
+        dbo.release_assets.scheduled_changes.conditions.t.select()
+        .where(dbo.release_assets.scheduled_changes.conditions.sc_id == locale_sc["sc_id"])
+        .execute()
+        .fetchone()
+    )
+    locale_sc_signoffs = (
+        dbo.release_assets.scheduled_changes.signoffs.t.select()
+        .where(dbo.release_assets.scheduled_changes.signoffs.sc_id == locale_sc["sc_id"])
+        .execute()
+        .fetchall()
+    )
+    assert locale_sc["scheduled_by"] == "bob"
+    assert locale_sc["complete"] is False
+    assert locale_sc["data_version"] == 1
+    assert locale_sc["base_data"] == firefox_56_0_build1["platforms"]["Linux_x86_64-gcc3"]["locales"]["en-US"]
+    assert locale_sc["base_data_version"] is None
+    assert locale_sc_cond["when"] == 1681639932000
+    assert len(locale_sc_signoffs) == 1
+    assert locale_sc_signoffs[0]["username"] == "bob"
+    assert locale_sc_signoffs[0]["role"] == "releng"
+
+
+@pytest.mark.usefixtures("releases_db", "mock_verified_userinfo")
+def test_put_add_scheduled_change_remove_locale(api, firefox_56_0_build1):
+    firefox_56_0_build1 = deepcopy(firefox_56_0_build1)
+    del firefox_56_0_build1["platforms"]["Linux_x86_64-gcc3"]["locales"]["en-US"]
+
+    old_data_versions = versions_dict()
+    assert old_data_versions["platforms"]["Linux_x86_64-gcc3"]["locales"]["en-US"]
+    new_data_versions = {"platforms": {"Linux_x86_64-gcc3": {"locales": {"en-US": {"sc_id": 18, "data_version": 1, "change_type": "delete"}}}}}
+
+    ret = api.put(
+        "/v2/releases/Firefox-56.0-build1",
+        json={"blob": firefox_56_0_build1, "product": "Firefox", "old_data_versions": old_data_versions, "when": 1681639932000},
+    )
+    assert ret.status_code == 200, ret.data
+    assert ret.json == new_data_versions, ret.json
+
+    base_sc = dbo.releases_json.scheduled_changes.t.select().where(dbo.releases_json.scheduled_changes.base_name == "Firefox-56.0-build1").execute().fetchall()
+    assert len(base_sc) == 0
+
+    locale_sc = (
+        dbo.release_assets.scheduled_changes.t.select()
+        .where(dbo.release_assets.scheduled_changes.base_name == "Firefox-56.0-build1")
+        .where(dbo.release_assets.scheduled_changes.base_path == ".platforms.Linux_x86_64-gcc3.locales.en-US")
+        .execute()
+        .fetchone()
+    )
+    locale_sc_cond = (
+        dbo.release_assets.scheduled_changes.conditions.t.select()
+        .where(dbo.release_assets.scheduled_changes.conditions.sc_id == locale_sc["sc_id"])
+        .execute()
+        .fetchone()
+    )
+    locale_sc_signoffs = (
+        dbo.release_assets.scheduled_changes.signoffs.t.select()
+        .where(dbo.release_assets.scheduled_changes.signoffs.sc_id == locale_sc["sc_id"])
+        .execute()
+        .fetchall()
+    )
+    assert locale_sc["scheduled_by"] == "bob"
+    assert locale_sc["complete"] is False
+    assert locale_sc["data_version"] == 1
+    assert locale_sc["base_data"] is None
+    assert locale_sc["base_data_version"] == 1
+    assert locale_sc_cond["when"] == 1681639932000
+    assert len(locale_sc_signoffs) == 1
+    assert locale_sc_signoffs[0]["username"] == "bob"
+    assert locale_sc_signoffs[0]["role"] == "releng"
+
+
+@pytest.mark.usefixtures("releases_db", "mock_verified_userinfo")
 def test_put_add_scheduled_change_base_and_locale(api, firefox_56_0_build1):
     firefox_56_0_build1 = deepcopy(firefox_56_0_build1)
     firefox_56_0_build1["displayVersion"] = "fifty six dot oh"
@@ -1131,6 +1227,294 @@ def test_put_add_scheduled_change_base_and_locale(api, firefox_56_0_build1):
     assert locale_sc["complete"] is False
     assert locale_sc["data_version"] == 1
     assert locale_sc["base_data"] == firefox_56_0_build1["platforms"]["Linux_x86_64-gcc3"]["locales"]["en-US"]
+    assert locale_sc["base_data_version"] == 1
+    assert locale_sc_cond["when"] == 1681639932000
+    assert len(locale_sc_signoffs) == 1
+    assert locale_sc_signoffs[0]["username"] == "bob"
+    assert locale_sc_signoffs[0]["role"] == "releng"
+
+
+@pytest.mark.usefixtures("releases_db", "mock_verified_userinfo")
+def test_put_update_scheduled_change_modify(api, firefox_64_0_build1):
+    firefox_64_0_build1 = deepcopy(firefox_64_0_build1)
+    firefox_64_0_build1["displayVersion"] = "sixty four dot oh"
+    firefox_64_0_build1["platforms"]["WINNT_x86_64-msvc"]["locales"]["en-US"]["buildID"] = "11111111111"
+
+    old_data_versions = versions_dict()
+    old_data_versions["."] = 1
+    assert old_data_versions["platforms"]["WINNT_x86_64-msvc"]["locales"]["en-US"]
+    new_data_versions = {
+        ".": {
+            "sc_id": 4,
+            "data_version": 2,
+            "change_type": "insert"
+        },
+        "platforms": {
+            "WINNT_x86_64-msvc": {
+                "locales": {
+                    "en-US": {
+                        "sc_id": 5,
+                        "data_version": 2,
+                        "change_type": "insert",
+                    }
+                }
+            }
+        }
+    }
+
+    ret = api.put(
+        "/v2/releases/Firefox-64.0-build1",
+        json={"blob": firefox_64_0_build1, "product": "Firefox", "old_data_versions": old_data_versions, "when": 1681639932000},
+    )
+    assert ret.status_code == 200, ret.data
+    assert ret.json == new_data_versions, ret.json
+
+    base_sc = dbo.releases_json.scheduled_changes.t.select().where(dbo.releases_json.scheduled_changes.base_name == "Firefox-64.0-build1").execute().fetchone()
+    base_sc_cond = (
+        dbo.releases_json.scheduled_changes.conditions.t.select()
+        .where(dbo.releases_json.scheduled_changes.conditions.sc_id == base_sc["sc_id"])
+        .execute()
+        .fetchone()
+    )
+    base_sc_signoffs = (
+        dbo.releases_json.scheduled_changes.signoffs.t.select()
+        .where(dbo.releases_json.scheduled_changes.signoffs.sc_id == base_sc["sc_id"])
+        .execute()
+        .fetchall()
+    )
+    assert base_sc["scheduled_by"] == "bob"
+    assert base_sc["complete"] is False
+    assert base_sc["data_version"] == 2
+    assert base_sc["base_data"]["displayVersion"] == "sixty four dot oh"
+    assert base_sc_cond["when"] == 1681639932000
+    assert len(base_sc_signoffs) == 1
+    assert base_sc_signoffs[0]["username"] == "bob"
+    assert base_sc_signoffs[0]["role"] == "releng"
+
+    modified_locale_sc = (
+        dbo.release_assets.scheduled_changes.t.select().where(dbo.release_assets.scheduled_changes.base_name == "Firefox-64.0-build1").where(dbo.release_assets.scheduled_changes.base_path == ".platforms.WINNT_x86_64-msvc.locales.en-US").execute().fetchone()
+    )
+    modified_locale_sc_cond = (
+        dbo.release_assets.scheduled_changes.conditions.t.select()
+        .where(dbo.release_assets.scheduled_changes.conditions.sc_id == modified_locale_sc["sc_id"])
+        .execute()
+        .fetchone()
+    )
+    modified_locale_sc_signoffs = (
+        dbo.release_assets.scheduled_changes.signoffs.t.select()
+        .where(dbo.release_assets.scheduled_changes.signoffs.sc_id == modified_locale_sc["sc_id"])
+        .execute()
+        .fetchall()
+    )
+    assert modified_locale_sc["scheduled_by"] == "bob"
+    assert modified_locale_sc["complete"] is False
+    assert modified_locale_sc["data_version"] == 2
+    assert modified_locale_sc["modified_locale_data"]["buildID"] == "11111111111"
+    assert modified_locale_sc_cond["when"] == 1681639932000
+    assert len(modified_locale_sc_signoffs) == 1
+    assert modified_locale_sc_signoffs[0]["username"] == "bob"
+    assert modified_locale_sc_signoffs[0]["role"] == "releng"
+
+
+@pytest.mark.usefixtures("releases_db", "mock_verified_userinfo")
+def test_put_update_scheduled_change_cancel_insert(api, firefox_64_0_build1):
+    firefox_64_0_build1 = deepcopy(firefox_64_0_build1)
+    for platform in firefox_64_0_build1["platforms"]:
+        if "locales" in firefox_64_0_build1["platforms"][platform]:
+            firefox_64_0_build1["platforms"][platform]["locales"]["en-US"]["buildID"] = "123456789"
+    del firefox_64_0_build1["platforms"]["WINNT_x86_64-msvc"]["locales"]["en-US"]
+
+    old_data_versions = versions_dict()
+    assert old_data_versions["platforms"]["WINNT_x86_64-msvc"]["locales"]["en-US"]
+
+    ret = api.put(
+        "/v2/releases/Firefox-64.0-build1",
+        json={"blob": firefox_64_0_build1, "product": "Firefox", "old_data_versions": old_data_versions, "when": 1681639932000},
+    )
+    assert ret.status_code == 200, ret.data
+    assert ret.json == {}, ret.json
+
+    base_sc = dbo.releases_json.scheduled_changes.t.select().where(dbo.releases_json.scheduled_changes.base_name == "Firefox-64.0-build1").execute().fetchone()
+    assert base_sc["data_version"] == 1
+
+    locale_sc = dbo.release_assets.scheduled_changes.t.select().where(dbo.release_assets.scheduled_changes.base_name == "Firefox-64.0-build1").where(dbo.release_assets.scheduled_changes.base_path == ".platforms.WINNT_x86_64-msvc.locales.en-US").execute().fetchall()
+    assert len(locale_sc) == 0
+
+    unchanged_locale_sc = dbo.release_assets.scheduled_changes.t.select().where(dbo.release_assets.scheduled_changes.base_name == "Firefox-64.0-build1").execute().fetchall()
+    assert len(unchanged_locale_sc) == 4
+
+
+@pytest.mark.usefixtures("releases_db", "mock_verified_userinfo")
+def test_put_update_scheduled_change_cancel_update(api, firefox_66_0_build1):
+    firefox_66_0_build1 = deepcopy(firefox_66_0_build1)
+    for platform in firefox_66_0_build1["platforms"]:
+        if "locales" in firefox_66_0_build1["platforms"][platform]:
+            firefox_66_0_build1["platforms"][platform]["locales"]["en-US"]["buildID"] = "123456789"
+    firefox_66_0_build1["platforms"]["WINNT_x86_64-msvc"]["locales"]["en-US"] = "20190311211048"
+
+    old_data_versions = versions_dict()
+    old_data_versions["."] = 1
+    assert old_data_versions["platforms"]["WINNT_x86_64-msvc"]["locales"]["en-US"]
+
+    ret = api.put(
+        "/v2/releases/Firefox-66.0-build1",
+        json={"blob": firefox_66_0_build1, "product": "Firefox", "old_data_versions": old_data_versions, "when": 1681639932000},
+    )
+    assert ret.status_code == 200, ret.data
+    assert ret.json == {}, ret.json
+
+    base_sc = dbo.releases_json.scheduled_changes.t.select().where(dbo.releases_json.scheduled_changes.base_name == "Firefox-66.0-build1").execute().fetchall()
+    assert len(base_sc) == 0
+
+    locale_sc = dbo.release_assets.scheduled_changes.t.select().where(dbo.release_assets.scheduled_changes.base_name == "Firefox-66.0-build1").where(dbo.release_assets.scheduled_changes.base_path == ".platforms.WINNT_x86_64-msvc.locales.en-US").execute().fetchall()
+    assert len(locale_sc) == 0
+
+
+@pytest.mark.usefixtures("releases_db", "mock_verified_userinfo")
+def test_put_update_scheduled_change_cancel_delete(api, firefox_67_0_build1):
+    firefox_67_0_build1 = deepcopy(firefox_67_0_build1)
+
+    old_data_versions = populate_versions_dict(firefox_67_0_build1)
+    old_data_versions["."] = 1
+
+    ret = api.put(
+        "/v2/releases/Firefox-67.0-build1",
+        json={"blob": firefox_67_0_build1, "product": "Firefox", "old_data_versions": old_data_versions, "when": 1681639932000},
+    )
+    assert ret.status_code == 200, ret.data
+    assert ret.json == {}, ret.json
+
+    base_sc = dbo.releases_json.scheduled_changes.t.select().where(dbo.releases_json.scheduled_changes.base_name == "Firefox-67.0-build1").execute().fetchall()
+    assert len(base_sc) == 0
+
+    locale_sc = dbo.release_assets.scheduled_changes.t.select().where(dbo.release_assets.scheduled_changes.base_name == "Firefox-67.0-build1").execute().fetchall()
+    assert len(locale_sc) == 0
+
+
+@pytest.mark.usefixtures("releases_db", "mock_verified_userinfo")
+def test_put_scheduled_update_into_scheduled_delete(api, firefox_66_0_build1):
+    old_data_versions = populate_versions_dict(firefox_66_0_build1)
+    old_data_versions["."] = 1
+    new_data_versions = {".": {"sc_id": 6, "data_version": 1, "change_type": "delete"}}
+    locale_sc_id = 18
+    for platform in firefox_66_0_build1["platforms"]:
+        if "locales" in firefox_66_0_build1["platforms"]:
+            new_data_versions["platforms"][platform]["locales"]["en-US"] = {
+                "sc_id": locale_sc_id,
+                "data_version": 1,
+                "change_type": "delete",
+            }
+            locale_sc_id += 1
+
+    ret = api.put(
+        "/v2/releases/Firefox-66.0-build1",
+        json={"blob": firefox_66_0_build1, "product": "Firefox", "old_data_versions": old_data_versions, "when": 1681639932000},
+    )
+    assert ret.status_code == 200, ret.data
+    assert ret.json == new_data_versions, ret.json
+
+    base_sc = dbo.releases_json.scheduled_changes.t.select().where(dbo.releases_json.scheduled_changes.base_name == "Firefox-66.0-build1").execute().fetchone()
+    base_sc_cond = (
+        dbo.releases_json.scheduled_changes.conditions.t.select()
+        .where(dbo.releases_json.scheduled_changes.conditions.sc_id == base_sc["sc_id"])
+        .execute()
+        .fetchone()
+    )
+    base_sc_signoffs = (
+        dbo.releases_json.scheduled_changes.signoffs.t.select()
+        .where(dbo.releases_json.scheduled_changes.signoffs.sc_id == base_sc["sc_id"])
+        .execute()
+        .fetchall()
+    )
+    assert base_sc["scheduled_by"] == "bob"
+    assert base_sc["complete"] is False
+    assert base_sc["data_version"] == 1
+    assert base_sc["base_data"] is None
+    assert base_sc["base_data_version"] == 1
+    assert base_sc_cond["when"] == 1681639932000
+    assert len(base_sc_signoffs) == 1
+    assert base_sc_signoffs[0]["username"] == "bob"
+    assert base_sc_signoffs[0]["role"] == "releng"
+
+    for locale_sc in dbo.release_assets.scheduled_changes.t.select().where(dbo.release_assets.scheduled_changes.base_name == "Firefox-66.0-build1").execute().fetchall():
+        locale_sc_cond = (
+            dbo.release_assets.scheduled_changes.conditions.t.select().where(dbo.release_assets.scheduled_changes.conditions.sc_id == 18).execute().fetchone()
+        )
+        locale_sc_signoffs = (
+            dbo.release_assets.scheduled_changes.signoffs.t.select().where(dbo.release_assets.scheduled_changes.signoffs.sc_id == 18).execute().fetchall()
+        )
+        assert locale_sc["scheduled_by"] == "bob"
+        assert locale_sc["complete"] is False
+        assert locale_sc["data_version"] == 1
+        assert locale_sc["base_data"] is None
+        assert locale_sc["base_data_version"] == 1
+        assert locale_sc_cond["when"] == 1681639932000
+        assert len(locale_sc_signoffs) == 1
+        assert locale_sc_signoffs[0]["username"] == "bob"
+        assert locale_sc_signoffs[0]["role"] == "releng"
+
+
+@pytest.mark.usefixtures("releases_db", "mock_verified_userinfo")
+def test_put_scheduled_delete_into_update(api, firefox_67_0_build1):
+    firefox_67_0_build1 = deepcopy(firefox_67_0_build1)
+    firefox_67_0_build1["displayVersion"] = "sixty seven dot oh"
+    firefox_67_0_build1["platforms"]["Linux_x86-gcc3"]["locales"]["en-US"]["buildID"] = "88888888888"
+
+    old_data_versions = populate_versions_dict(firefox_67_0_build1)
+    old_data_versions["."] = 1
+    new_data_versions = {
+        ".": {
+            "sc_id": 6,
+            "data_version": 1,
+            "change_type": "update",
+        },
+        "platforms": {
+            "Linux_x86-gcc3": {
+                "locales": {
+                    "en-US": {
+                        "sc_id": 18,
+                        "data_version": 1,
+                        "change_type": "update",
+                    }
+                }
+            }
+        }
+    }
+
+    base_sc = dbo.releases_json.scheduled_changes.t.select().where(dbo.releases_json.scheduled_changes.base_name == "Firefox-67.0-build1").execute().fetchone()
+    base_sc_cond = (
+        dbo.releases_json.scheduled_changes.conditions.t.select()
+        .where(dbo.releases_json.scheduled_changes.conditions.sc_id == base_sc["sc_id"])
+        .execute()
+        .fetchone()
+    )
+    base_sc_signoffs = (
+        dbo.releases_json.scheduled_changes.signoffs.t.select()
+        .where(dbo.releases_json.scheduled_changes.signoffs.sc_id == base_sc["sc_id"])
+        .execute()
+        .fetchall()
+    )
+    assert base_sc["scheduled_by"] == "bob"
+    assert base_sc["complete"] is False
+    assert base_sc["data_version"] == 1
+    assert base_sc["base_data"]["displayVersion"] == "sixty seven dot oh"
+    assert base_sc["base_data_version"] == 1
+    assert base_sc_cond["when"] == 1681639932000
+    assert len(base_sc_signoffs) == 1
+    assert base_sc_signoffs[0]["username"] == "bob"
+    assert base_sc_signoffs[0]["role"] == "releng"
+
+    locale_sc = dbo.release_assets.scheduled_changes.t.select().where(dbo.release_assets.scheduled_changes.base_name == "Firefox-6.0-build1").where(dbo.release_assets.scheduled_changes.base_path == ".platforms.Linux_x86-gcc3.locales.en-US").execute().fetchone()
+    locale_sc_cond = (
+        dbo.release_assets.scheduled_changes.conditions.t.select().where(dbo.release_assets.scheduled_changes.conditions.sc_id == 18).execute().fetchone()
+    )
+    locale_sc_signoffs = (
+        dbo.release_assets.scheduled_changes.signoffs.t.select().where(dbo.release_assets.scheduled_changes.signoffs.sc_id == 18).execute().fetchall()
+    )
+    assert locale_sc["scheduled_by"] == "bob"
+    assert locale_sc["complete"] is False
+    assert locale_sc["data_version"] == 1
+    assert locale_sc["base_data"]["buildID"] == "88888888888"
     assert locale_sc["base_data_version"] == 1
     assert locale_sc_cond["when"] == 1681639932000
     assert len(locale_sc_signoffs) == 1
